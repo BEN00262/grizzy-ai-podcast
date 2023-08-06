@@ -1,15 +1,16 @@
-## brain dump of the grizzy ai ( text to podcast )
+## brain dump of the grizzy ai ( text to podcast ) 
+### listen to some generated content at [https://grizzy-ai.transistor.fm/](https://grizzy-ai.transistor.fm/)
 
 ### Add this keys to a .env file
 
-```bash:
+```bash
     OPENAI_API_KEY = "open ai key"
     REPLICATE_API_TOKEN = "replicate key"
 ```
 
 ### open the main.py file and modify
 
-```python:
+```python
     if __name__ == "__main__":
         text_to_podcast = TextToPodcast()
 

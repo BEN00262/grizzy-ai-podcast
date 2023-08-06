@@ -1,5 +1,5 @@
 """
-PodcastAI
+Grizzy Ai podcast
 TODO:
     supports:
         upto latest research --> hookup the internet connection
@@ -294,7 +294,7 @@ if __name__ == "__main__":
 
     text_to_podcast.generate_podcast_resources(
         name = "Dingo and the Baby",
-        title = "seduction and how to approach women",
+        title = "food poisoning",
         participants = [
             Participant(name="Sharon", role="Host", gender="female", voice="angie"),
             Participant(name="Brian", role="Co-host", gender="male", voice="freeman"),
@@ -302,7 +302,7 @@ if __name__ == "__main__":
         ],
         sponsors = [
             SponsorMessage(
-                message="Magnum, Enjoy larger than life pleasure"
+                message="Blueband, the best jam to use"
             )
         ]
     )
