@@ -27,6 +27,8 @@ from moviepy.editor import AudioFileClip, ImageClip
 import replicate
 import threading
 import wget
+import json
+import spotdl
 
 # from langchain.agents import initialize_agent, Tool
 # from langchain.agents import AgentType
@@ -43,11 +45,30 @@ class ConversationPiece(BaseModel):
     speakers_name: str = Field(description="name of the current speaker")
     speaker_voice: str = Field(description="the voice of the current speaker")
     line: str = Field(description="what the speaker is saying")
-    
+
+class Music(BaseModel):
+    theme: str = Field(description="theme of the music to be played")
+    position: int = Field(description="position where the music should be played, this should be in relation to the discussion")
+
+class MusicToBePlayed(BaseModel):
+    music_theme: str = Field(description="theme of the music to be played")
+    mode: str = Field(description="whether the music is a background music or not ( background | foreground )")
+    volume_level: float = Field(description="the volume level of the music to be played relative to the expected general volume of the podcast")
+    what_percentage: float = Field(description="the percentage of the music to be played")
+
 class Conversation(BaseModel):
     title: str = Field(description="title of the current topic being discussed")
     description: str = Field(description="a single line description of the current topic being discussed")
+    music_theme: str = Field(description="the music theme to be played depending on the current topic being discussed")
+    music_to_be_played: List[Music] = Field(description="a list of music to be played depending on the current topic being discussed")
     conversation: List[ConversationPiece] = Field(description="a list of the conversation segments within the podcast")
+
+class ConversationWithMergedMusic(BaseModel):
+    title: str = Field(description="title of the current topic being discussed")
+    description: str = Field(description="a single line description of the current topic being discussed")
+    music_theme: str = Field(description="the music theme to be played depending on the current topic being discussed")
+    music_to_be_played: List[Music] = Field(description="a list of music to be played depending on the current topic being discussed")
+    conversation: List[ConversationPiece | MusicToBePlayed] = Field(description="a list of the conversation segments or music to be played within the podcast")
 
 class Participant(BaseModel):
     name: str = Field(description="name of the participant")
@@ -62,12 +83,14 @@ class TextToPodcast:
     def __init__(self) -> None:
         self.chat_model = ChatOpenAI(
             openai_api_key=getenv("OPENAI_API_KEY"), model_name="gpt-3.5-turbo-16k",
-            max_tokens=10385
+            max_tokens=10385,
+            temperature=.9
         )
         
         self.parser = PydanticOutputParser(pydantic_object=Conversation)
+        self.final_parser = PydanticOutputParser(pydantic_object=ConversationWithMergedMusic)
 
-    def _generate_podcast_script(self, *, name, title, participants: List[Participant], sponsors: List[SponsorMessage] = []) -> Conversation:
+    def _generate_podcast_script(self, *, name, title, participants: List[Participant], sponsors: List[SponsorMessage] = []) -> ConversationWithMergedMusic:
         sponsors_messages = "\n".join([f"{s.message}" for s in sponsors])
 
         prompt = PromptTemplate(
@@ -89,7 +112,7 @@ class TextToPodcast:
         # work on the script generation to better improve it
         # script was iterated with referrence to :: https://www.ausha.co/blog/podcast-script-templates/
         messages = [
-            SystemMessage(content=f"""You are an experienced podcast script writer for the '{name}' podcast. Using your knowledge and experience try your best to to generate the best script for the title supplied by the user. Make the script engaging with wit, sacarsm, crack jokes when necessary or even volunteer experiences or stories the participants might have heard, experienced, been told about or read about that are relevant to the topic under discussion. Be thorough in your discussions, giving each participant equal chances to contribute to the discussion. The script should be mind stimulating, eye opening, fun to listen to and understandable to your audience. Also your podcast participants should pose questions where necessary among themselves or to the listeners. Dont make the podcast too formal. The scripts should have a clear start and ending, do not prematurely end discussions in the middle. The conversations should also be coherent and flow logically. The mood of the title should dictate the mood of the script. Use real names for the participants. Make sure that the script flows. Include the participants reactions e.g [laughs].
+            SystemMessage(content=f"""You are an experienced podcast script writer for the '{name}' podcast. Using your knowledge and experience try your best to to generate the best script for the title supplied by the user. Make the script engaging with wit, sacarsm, crack jokes when necessary or even volunteer experiences or stories the participants might have heard, experienced, been told about or read about that are relevant to the topic under discussion. Be thorough in your discussions, giving each participant equal chances to contribute to the discussion. The script should be mind stimulating, eye opening, fun to listen to and understandable to your audience. Also your podcast participants should pose questions where necessary among themselves or to the listeners. Dont make the podcast too formal. The scripts should have a clear start and ending, do not prematurely end discussions in the middle. The conversations should also be coherent and flow logically. The mood of the title should dictate the mood of the script. Use real names for the participants. Make sure that the script flows. Include the participants reactions e.g [laughs], [sighs], [music], [gasps], [clears throat]. Also add indicators to where music or sounds should be played. Ensure you add music or sounds to the podcast script. For the sounds or music add descriptions to what you want the music to be. use CAPITALIZATION for emphasis of a word. If there is any music to be played make the conversation to flow to it in a clean way.
                           
 
             Building blocks for a podcast
@@ -172,35 +195,39 @@ class TextToPodcast:
             HumanMessage(content=prompt.format_prompt(title=title).to_string())
         ]
 
-        # wikipedia = WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
+        result = self.parser.parse(self.chat_model.generate(messages=[messages]).generations[0][0].text)
 
-        # print(wikipedia.run(title))
-        # wrapper = DuckDuckGoSearchAPIWrapper(region="de-de", time="d", max_results=2)
+        # get the result then pass it through another pipeline to merge the music with the conversation
+        prompt_clean_pipeline = PromptTemplate(
+            template = """Given the podcast script below add sections in the conversation to where the music if any should be played. You should maintain the formatting, only introduce the music segments.\n\n{format_instructions}\n\n\n
 
-        # search = DuckDuckGoSearchResults(api_wrapper=wrapper)
+                podcast script
+                -----------------
+                {script}
+            
+            """.strip(),
+            input_variables = [],
+            partial_variables = {
+                "format_instructions": self.final_parser.get_format_instructions(),
+                "script": json.dumps(result.json())
+            }
+        )
 
-        # # print(search.run(title))
+        clean_messages = [
+            SystemMessage(
+                content="""
+                    You are an experienced podcast script editor and programme planner. Using your experience please edit the podcast script with the fragments supplied to produce the best possible script while following the instructions given by the user. Be as professional as possible, fix any grammatical errors you encounter. Also rewrite the participants conversations to allow the co-host or host to smoothly introduce the music to be played if available. Make the music transitions to be as natural as possible, don't break the general flow of the discussion. The conversations should continue with a natural flow even after the music has been played. The participants should acknowledge any music ( background or foreground ) introduced to the conversation. Music MUST be included the conversation flow, be creative with this.
+                """.strip()
+            ),
+            HumanMessage(content=prompt_clean_pipeline.format_prompt().to_string())
+        ]
 
-        # tools = [
-        #     Tool(
-        #         name="Search",
-        #         func=search.run,
-        #         description="useful for when you need to answer questions about current events",
-        #         return_direct=True,
-        #     )
-        # ]
+        final_script = self.chat_model.generate(messages=[clean_messages]).generations[0][0].text
 
-        # agent = initialize_agent(
-        #     tools, self.chat_model, agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION, verbose=True
-        # )
+        # the final script after the previous check step
+        print(final_script)
 
-        # print(agent.run(f"generate a detailed discussion on {title}. The information should be up to date and supported by facts. Include any news, events or anything thats related to the title."))
-
-        result = self.chat_model.generate(messages=[messages])
-
-        print(result.generations[0][0].text)
-
-        return self.parser.parse(result.generations[0][0].text)
+        return self.final_parser.parse(final_script)
     
 
     def generate_podcast_resources(self, *, name, title, participants: List[Participant], sponsors: List[SponsorMessage] = []):
@@ -241,6 +268,11 @@ class TextToPodcast:
                     thread.start()
 
                     threads.append(thread)
+
+                elif isinstance(line, MusicToBePlayed):
+                    # search for music fitting the theme ( just combine for now ) ->> forground ->> fade in then can fade out after the what percentage is done
+                    # use https://github.com/spotDL/spotify-downloader
+                    pass
                 else:
                     # this handles transitions -- maybe
                     print(line)
@@ -252,6 +284,7 @@ class TextToPodcast:
 
 
             # loop through the files in the fragments folder and combine them
+            # have a metadata map for this stuff
             fragments = sorted(
                 [join(tmpdirname,"fragments", f) for f in listdir(join(tmpdirname, "fragments")) if isfile(join(tmpdirname, "fragments", f))],
                 key=lambda x: int(os.path.basename(x).split(".")[0])
@@ -289,35 +322,44 @@ class TextToPodcast:
 
 
 # support generation of content that fits tiktok, youtube and regular podcasts ( we want to support dubbing )
+# target for today is to introduce music into the mix
+
 if __name__ == "__main__":
     text_to_podcast = TextToPodcast()
 
-    text_to_podcast.generate_podcast_resources(
-        name = "Dingo and the Baby",
-        title = "food poisoning",
-        participants = [
+    # text_to_podcast.generate_podcast_resources(
+    #     name = "Dingo and the Baby",
+    #     title = "greatest wonders of the world",
+    #     participants = [
+    #         Participant(name="Sharon", role="Host", gender="female", voice="angie"),
+    #         Participant(name="Brian", role="Co-host", gender="male", voice="deniro"),
+    #         Participant(name="Emma", role="Guest", gender="female", voice="halle"),
+    #         Participant(name="John", role="Guest", gender="male", voice="freeman"),
+    #     ],
+    #     sponsors = [
+    #         SponsorMessage(
+    #             message="Blueband, the best jam to use"
+    #         ),
+
+    #         SponsorMessage(
+    #             message="Colgate Total Mouthwash, Stronger, healthier gums.s"
+    #         )
+    #     ]
+    # )
+
+    text_to_podcast._generate_podcast_script(
+        name="Dingo and the Baby",
+        title="fashion through history",
+
+        participants=[
             Participant(name="Sharon", role="Host", gender="female", voice="angie"),
             Participant(name="Brian", role="Co-host", gender="male", voice="freeman"),
-            Participant(name="Dorothy", role="Guest", gender="female", voice="halle"),
+            Participant(name="Dorothy", role="Co-host", gender="female", voice="halle"),
         ],
-        sponsors = [
+
+        sponsors=[
             SponsorMessage(
                 message="Blueband, the best jam to use"
             )
         ]
     )
-
-    # text_to_podcast._generate_podcast_script(
-    #     name="Dingo and the Baby",
-    #     title="food poisioning",
-    #     participants=[
-    #         Participant(name="Sharon", role="Host", gender="female", voice="angie"),
-    #         Participant(name="Brian", role="Co-host", gender="male", voice="freeman"),
-    #         Participant(name="Dorothy", role="Guest", gender="female", voice="halle"),
-    #     ],
-    #     sponsors=[
-    #         SponsorMessage(
-    #             message="Blueband, the best jam to use"
-    #         )
-    #     ]
-    # )
