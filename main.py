@@ -7,6 +7,8 @@ TODO:
         intro to be used ( done -- watermark )
 """
 
+import shutil
+import typing
 from dotenv import load_dotenv
 
 load_dotenv()  # take environment variables from .env.
@@ -39,6 +41,13 @@ import spotdl
 # from langchain.tools import WikipediaQueryRun
 # from langchain.utilities import WikipediaAPIWrapper
 # from langchain.utilities import DuckDuckGoSearchAPIWrapper
+
+from langchain.document_loaders import PyPDFLoader
+from langchain.chains.summarize import load_summarize_chain
+from langchain.document_loaders import WebBaseLoader
+from mimetypes import MimeTypes
+import urllib
+import azure.cognitiveservices.speech as speechsdk
 
 # Define your desired data structure.
 class ConversationPiece(BaseModel):
@@ -89,6 +98,37 @@ class TextToPodcast:
         
         self.parser = PydanticOutputParser(pydantic_object=Conversation)
         self.final_parser = PydanticOutputParser(pydantic_object=ConversationWithMergedMusic)
+        self.spotiy_downloader = spotdl.Spotdl(
+            client_id = os.getenv("SPOTIFY_CLIENT_ID"),
+            client_secret = os.getenv("SPOTIFY_CLIENT_SECRET"),
+            no_cache = True,
+            headless = False
+        )
+
+    # this generates the podcast from a material -- generate a summary showing the key points -- slap audio on top
+    def _convert_material_to_podcast(self, *, material_location: str) -> typing.Optional[str]:
+        mime = MimeTypes()
+
+        url = urllib.request.pathname2url(material_location)
+
+        (mime_type, _) = mime.guess_type(url)
+
+        loader = None
+
+        if mime_type == "application/pdf":
+            loader = PyPDFLoader(material_location)
+
+        elif mime_type == "text/html":
+            loader = WebBaseLoader(material_location)
+        
+        if loader is not None:
+            docs = loader.load()
+
+            # summary agent
+            chain = load_summarize_chain(self.chat_model, chain_type="map_reduce")
+            print(chain.run(docs))
+
+        return None
 
     def _generate_podcast_script(self, *, name, title, participants: List[Participant], sponsors: List[SponsorMessage] = []) -> ConversationWithMergedMusic:
         sponsors_messages = "\n".join([f"{s.message}" for s in sponsors])
@@ -112,7 +152,7 @@ class TextToPodcast:
         # work on the script generation to better improve it
         # script was iterated with referrence to :: https://www.ausha.co/blog/podcast-script-templates/
         messages = [
-            SystemMessage(content=f"""You are an experienced podcast script writer for the '{name}' podcast. Using your knowledge and experience try your best to to generate the best script for the title supplied by the user. Make the script engaging with wit, sacarsm, crack jokes when necessary or even volunteer experiences or stories the participants might have heard, experienced, been told about or read about that are relevant to the topic under discussion. Be thorough in your discussions, giving each participant equal chances to contribute to the discussion. The script should be mind stimulating, eye opening, fun to listen to and understandable to your audience. Also your podcast participants should pose questions where necessary among themselves or to the listeners. Dont make the podcast too formal. The scripts should have a clear start and ending, do not prematurely end discussions in the middle. The conversations should also be coherent and flow logically. The mood of the title should dictate the mood of the script. Use real names for the participants. Make sure that the script flows. Include the participants reactions e.g [laughs], [sighs], [music], [gasps], [clears throat]. Also add indicators to where music or sounds should be played. Ensure you add music or sounds to the podcast script. For the sounds or music add descriptions to what you want the music to be. use CAPITALIZATION for emphasis of a word. If there is any music to be played make the conversation to flow to it in a clean way.
+            SystemMessage(content=f"""You are an experienced podcast script writer for the '{name}' podcast. Using your knowledge and experience try your best to to generate the best script for the title supplied by the user. Make the script engaging with wit, sacarsm, crack jokes when necessary or even volunteer experiences or stories the participants might have heard, experienced, been told about or read about that are relevant to the topic under discussion. Be thorough in your discussions, giving each participant equal chances to contribute to the discussion. The script should be mind stimulating, eye opening, fun to listen to and understandable to your audience. Also your podcast participants should pose questions where necessary among themselves or to the listeners. Dont make the podcast too formal. The scripts should have a clear start and ending, do not prematurely end discussions in the middle. The conversations should also be coherent and flow logically. The mood of the title should dictate the mood of the script. Use real names for the participants. Make sure that the script flows. Include the participants reactions e.g [laughs], [sighs], [music], [gasps], [clears throat]. Also add indicators to where music or sounds should be played. Ensure you add music or sounds to the podcast script. For the sounds or music add descriptions to what you want the music theme to be - be as descriptive with the theme descriptions. use CAPITALIZATION for emphasis of a word. If there is any music to be played make the conversation to flow to it in a clean way.
                           
 
             Building blocks for a podcast
@@ -216,7 +256,7 @@ class TextToPodcast:
         clean_messages = [
             SystemMessage(
                 content="""
-                    You are an experienced podcast script editor and programme planner. Using your experience please edit the podcast script with the fragments supplied to produce the best possible script while following the instructions given by the user. Be as professional as possible, fix any grammatical errors you encounter. Also rewrite the participants conversations to allow the co-host or host to smoothly introduce the music to be played if available. Make the music transitions to be as natural as possible, don't break the general flow of the discussion. The conversations should continue with a natural flow even after the music has been played. The participants should acknowledge any music ( background or foreground ) introduced to the conversation. Music MUST be included the conversation flow, be creative with this.
+                    You are an experienced podcast script editor and programme planner. Using your experience please edit the podcast script with the fragments supplied to produce the best possible script while following the instructions given by the user. Be as professional as possible, fix any grammatical errors you encounter. Also rewrite the participants conversations to allow the co-host or host to smoothly introduce the music to be played if available. Make the music transitions to be as natural as possible, don't break the general flow of the discussion. The conversations should continue with a natural flow even after the music has been played. The participants should acknowledge any music ( background or foreground ) introduced to the conversation. Music MUST be included the conversation flow, be creative with this. YOU ARE REQUIRED TO DO AS STATED IN THE PROMPT. Don't deviate at all. All music segments MUST be integrated into the discussion in the stated format. Follow the instructions to the latter.
                 """.strip()
             ),
             HumanMessage(content=prompt_clean_pipeline.format_prompt().to_string())
@@ -229,6 +269,48 @@ class TextToPodcast:
 
         return self.final_parser.parse(final_script)
     
+    def generate_speech_from_text(self, *, voice: str, text: str, audio_file: str):
+        """
+            supported voices
+            -------------------
+            	en-GB-SoniaNeural (Female)
+                en-GB-RyanNeural (Male)
+                en-GB-LibbyNeural (Female)
+                en-GB-AbbiNeural (Female)
+                en-GB-AlfieNeural (Male)
+                en-GB-BellaNeural (Female)
+                en-GB-ElliotNeural (Male)
+                en-GB-EthanNeural (Male)
+                en-GB-HollieNeural (Female)
+                en-GB-MaisieNeural (Female, Child)
+                en-GB-NoahNeural (Male)
+                en-GB-OliverNeural (Male)
+                en-GB-OliviaNeural (Female)
+                en-GB-ThomasNeural (Male)
+        """
+        
+        speech_config = speechsdk.SpeechConfig(subscription=os.getenv('SPEECH_KEY'), region=os.getenv('SPEECH_REGION'))
+        
+        audio_config = speechsdk.audio.AudioOutputConfig(
+            use_default_speaker = True,
+            filename = audio_file
+        )
+
+        speech_config.speech_synthesis_voice_name = voice
+
+        speech_synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=audio_config)
+
+        speech_synthesis_result = speech_synthesizer.speak_text_async(text).get()
+
+        if speech_synthesis_result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+            print("Speech synthesized for text [{}], and the audio was saved to [{}]".format(text, audio_file))
+
+        elif speech_synthesis_result.reason == speechsdk.ResultReason.Canceled:
+            cancellation_details = speech_synthesis_result.cancellation_details
+            print("Speech synthesis canceled: {}".format(cancellation_details.reason))
+            if cancellation_details.reason == speechsdk.CancellationReason.Error:
+                print("Error details: {}".format(cancellation_details.error_details))
+    
 
     def generate_podcast_resources(self, *, name, title, participants: List[Participant], sponsors: List[SponsorMessage] = []):
 
@@ -239,28 +321,43 @@ class TextToPodcast:
             sponsors=sponsors
         )
 
+        # print(podcast_script)
+
         with tempfile.TemporaryDirectory() as tmpdirname:
             if not os.path.exists(join(tmpdirname, "fragments")):
                 os.makedirs(join(tmpdirname, "fragments"))
 
             threads = []
 
+            # TBD: move the helper functions out of this function
             def _run_in_replicate(fragment: int, conversation: ConversationPiece):
-                # print(conversation)
-
                 try:
-                    # optimize this bit -- make it faster and reliable ( cost friendly )
-                    audio = replicate.run(
-                        "afiaka87/tortoise-tts:e9658de4b325863c4fcdc12d94bb7c9b54cbfe351b7ca1b36860008172b91c71",
-                        input={
-                            "text": conversation.line, "voice_a": conversation.speaker_voice.lower(), 
-                            "preset": "standard", "seed": 42, "cvvp_amount": 0.9 
-                        }
+                    self.generate_speech_from_text(
+                        voice = conversation.speaker_voice,
+                        text = conversation.line,
+                        audio_file = join(tmpdirname, "fragments", f"{fragment}.wav")
                     )
 
-                    wget.download(audio, join(tmpdirname, "fragments", f"{fragment}.mp3"))
                 except Exception as e:
                     print(e)
+
+            # def _download_resource_from_spotify(fragment: int, music: MusicToBePlayed):
+            #     # use https://github.com/spotDL/spotify-downloader
+            #     songs = self.spotiy_downloader.search([music.music_theme])
+
+            #     print(songs)
+
+            #     (song, path_to_song) = self.spotiy_downloader.download(
+            #         song = songs[0]
+            #     )
+
+            #     # print((song, path_to_song))
+
+            #     # make the saving a bit advanced. This is for testing only
+
+            #     if song is not None and path_to_song is not None:
+            #         shutil.copy(path_to_song, join(tmpdirname, "fragments", f"{fragment}.mp3"))
+
 
             for fragment, line in enumerate(podcast_script.conversation):
                 if isinstance(line, ConversationPiece):
@@ -269,13 +366,16 @@ class TextToPodcast:
 
                     threads.append(thread)
 
-                elif isinstance(line, MusicToBePlayed):
-                    # search for music fitting the theme ( just combine for now ) ->> forground ->> fade in then can fade out after the what percentage is done
-                    # use https://github.com/spotDL/spotify-downloader
-                    pass
-                else:
-                    # this handles transitions -- maybe
-                    print(line)
+                # elif isinstance(line, MusicToBePlayed):
+                #     # search for music fitting the theme ( just combine for now ) ->> forground ->> fade in then can fade out after the what percentage is done
+                #     # use https://github.com/spotDL/spotify-downloader
+                #     thread = threading.Thread(target=_download_resource_from_spotify, args=(fragment, line))
+                #     thread.start()
+
+                #     threads.append(thread)
+                # else:
+                #     # this handles transitions -- maybe
+                #     print(line)
             
             # wait for all the threads to finish
             for thread in threads:
@@ -303,9 +403,9 @@ class TextToPodcast:
                 openai.api_key = getenv("OPENAI_API_KEY")
 
                 response = openai.Image.create(
-                    prompt=podcast_script.title,
-                    n=1,
-                    size="1024x1024"
+                    prompt = podcast_script.title,
+                    n = 1,
+                    size = "1024x1024"
                 )
 
                 image_url = response['data'][0]['url']
@@ -327,39 +427,22 @@ class TextToPodcast:
 if __name__ == "__main__":
     text_to_podcast = TextToPodcast()
 
-    # text_to_podcast.generate_podcast_resources(
-    #     name = "Dingo and the Baby",
-    #     title = "greatest wonders of the world",
-    #     participants = [
-    #         Participant(name="Sharon", role="Host", gender="female", voice="angie"),
-    #         Participant(name="Brian", role="Co-host", gender="male", voice="deniro"),
-    #         Participant(name="Emma", role="Guest", gender="female", voice="halle"),
-    #         Participant(name="John", role="Guest", gender="male", voice="freeman"),
-    #     ],
-    #     sponsors = [
-    #         SponsorMessage(
-    #             message="Blueband, the best jam to use"
-    #         ),
-
-    #         SponsorMessage(
-    #             message="Colgate Total Mouthwash, Stronger, healthier gums.s"
-    #         )
-    #     ]
-    # )
-
-    text_to_podcast._generate_podcast_script(
-        name="Dingo and the Baby",
-        title="fashion through history",
-
-        participants=[
-            Participant(name="Sharon", role="Host", gender="female", voice="angie"),
-            Participant(name="Brian", role="Co-host", gender="male", voice="freeman"),
-            Participant(name="Dorothy", role="Co-host", gender="female", voice="halle"),
+    text_to_podcast.generate_podcast_resources(
+        name = "Dingo and the Baby",
+        title = "food",
+        participants = [
+            Participant(name="Sharon", role="Host", gender="female", voice="en-GB-SoniaNeural"),
+            Participant(name="Brian", role="Co-host", gender="male", voice="en-GB-RyanNeural"),
+            Participant(name="Emma", role="Guest", gender="female", voice="en-GB-BellaNeural"),
+            Participant(name="John", role="Guest", gender="male", voice="en-GB-OliverNeural"),
         ],
-
-        sponsors=[
+        sponsors = [
             SponsorMessage(
                 message="Blueband, the best jam to use"
+            ),
+
+            SponsorMessage(
+                message="Colgate Total Mouthwash, Stronger, healthier gums.s"
             )
         ]
     )

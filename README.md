@@ -5,7 +5,8 @@
 
 ```bash
     OPENAI_API_KEY = "open ai key"
-    REPLICATE_API_TOKEN = "replicate key"
+    SPEECH_KEY = "azure speech key"
+    SPEECH_REGION = "azure speech region"
 ```
 
 ### open the main.py file and modify
@@ -18,12 +19,29 @@
             name = "Dingo and the Baby", # change this to match your podcast name
             title = "food poisoning", # change this to match the title of the topic you want a podcast to be generated about
 
-            # add your participants ( voices can be angie, deniro, freeman, halle, tom, daniel, emma, geralt, jlaw, tim_reynolds, train_atkins, train_dotrice, train_empire, train_kennard, william )
+            """
+                supported voices
+                -------------------
+                    en-GB-SoniaNeural (Female)
+                    en-GB-RyanNeural (Male)
+                    en-GB-LibbyNeural (Female)
+                    en-GB-AbbiNeural (Female)
+                    en-GB-AlfieNeural (Male)
+                    en-GB-BellaNeural (Female)
+                    en-GB-ElliotNeural (Male)
+                    en-GB-EthanNeural (Male)
+                    en-GB-HollieNeural (Female)
+                    en-GB-MaisieNeural (Female, Child)
+                    en-GB-NoahNeural (Male)
+                    en-GB-OliverNeural (Male)
+                    en-GB-OliviaNeural (Female)
+                    en-GB-ThomasNeural (Male)
+            """
 
             participants = [
-                Participant(name="Sharon", role="Host", gender="female", voice="angie"),
-                Participant(name="Brian", role="Co-host", gender="male", voice="freeman"),
-                Participant(name="Dorothy", role="Guest", gender="female", voice="halle"),
+                Participant(name="Sharon", role="Host", gender="female", voice="en-GB-SoniaNeural"),
+                Participant(name="Brian", role="Co-host", gender="male", voice="en-GB-RyanNeural"),
+                Participant(name="Dorothy", role="Guest", gender="female", voice="en-GB-BellaNeural"),
             ],
 
             # change or add sponsors messages in the format as below
